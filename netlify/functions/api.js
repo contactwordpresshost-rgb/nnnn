@@ -13,38 +13,37 @@ const FILE_MAP = {
     128: [{ file: 'reyhanSHA512.txt', label: 'SHA512' }]
 };
 
-// Baca file txt line-by-line menggunakan stream (hemat memori)
 function searchInFile(filePath, targetLower) {
     return new Promise((resolve, reject) => {
         if (!fs.existsSync(filePath)) {
-            return resolve(null);
+            return resolve({ found: null, status: 'FILE_NOT_FOUND', totalLines: 0, sampleLines: [] });
         }
 
         const rl = readline.createInterface({
             input: fs.createReadStream(filePath, { encoding: 'utf8' }),
-            crlfDelay: Infinity // Handle \r\n (Windows line endings)
+            crlfDelay: Infinity
         });
 
         let lineNum = 0;
         let found = null;
+        let sampleLines = [];
 
         rl.on('line', (rawLine) => {
-            if (found) return; // Sudah ketemu, skip sisa baris
-
             lineNum++;
+            if (lineNum <= 5) sampleLines.push(rawLine); // simpan 5 baris pertama
+
+            if (found) return;
             const line = rawLine.trim();
             if (!line) return;
 
             const starIdx = line.indexOf('☆');
 
             if (starIdx === -1) {
-                // Format: hanya hash
                 if (line.toLowerCase() === targetLower) {
                     found = { lineNum, hash: line, plain: null };
                     rl.close();
                 }
             } else {
-                // Format: plaintext☆hash
                 const hashPart = line.substring(starIdx + 1).trim();
                 if (hashPart.toLowerCase() === targetLower) {
                     const plain = line.substring(0, starIdx).trim();
@@ -54,8 +53,8 @@ function searchInFile(filePath, targetLower) {
             }
         });
 
-        rl.on('close', () => resolve(found));
-        rl.on('error', (err) => reject(err));
+        rl.on('close', () => resolve({ found, status: 'OK', totalLines: lineNum, sampleLines }));
+        rl.on('error', reject);
     });
 }
 
@@ -73,31 +72,46 @@ exports.handler = async (event) => {
     const targetLower = target.toLowerCase().trim();
     const targetLen = targetLower.length;
 
+    // Scan semua file txt yang ada di direktori
+    const allTxtFiles = fs.readdirSync(__dirname).filter(f => f.endsWith('.txt'));
+
     const entries = FILE_MAP[targetLen];
     if (!entries) {
         return {
             statusCode: 200,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ found: false, error: 'Hash length not recognized', len: targetLen })
+            body: JSON.stringify({
+                found: false,
+                error: 'Hash length not recognized',
+                targetLen,
+                allTxtFiles,
+                dir: __dirname
+            })
         };
     }
 
+    const debugInfo = [];
+
     for (const entry of entries) {
         const filePath = path.join(__dirname, entry.file);
-
         try {
             const result = await searchInFile(filePath, targetLower);
 
-            if (result) {
+            debugInfo.push({
+                file: entry.file,
+                status: result.status,
+                totalLines: result.totalLines,
+                sample: result.sampleLines
+            });
+
+            if (result.found) {
                 const response = {
                     found: true,
                     type: entry.label,
-                    line: result.lineNum,
-                    hash: result.hash
+                    line: result.found.lineNum,
+                    hash: result.found.hash
                 };
-                if (result.plain !== null) {
-                    response.plain = result.plain;
-                }
+                if (result.found.plain !== null) response.plain = result.found.plain;
                 return {
                     statusCode: 200,
                     headers: { 'Content-Type': 'application/json' },
@@ -105,14 +119,21 @@ exports.handler = async (event) => {
                 };
             }
         } catch (err) {
-            console.error(`Error reading ${entry.file}:`, err.message);
-            // Lanjut ke file berikutnya jika ada error
+            debugInfo.push({ file: entry.file, status: 'ERROR', error: err.message });
         }
     }
 
+    // Selalu tampilkan debug kalau tidak ketemu
     return {
         statusCode: 200,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ found: false })
+        body: JSON.stringify({
+            found: false,
+            target: targetLower,
+            targetLen,
+            dir: __dirname,
+            allTxtFiles,
+            checkedFiles: debugInfo
+        })
     };
 };
