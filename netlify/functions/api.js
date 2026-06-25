@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline');
 
 const FILE_MAP = {
     32: [
@@ -12,14 +13,60 @@ const FILE_MAP = {
     128: [{ file: 'reyhanSHA512.txt', label: 'SHA512' }]
 };
 
+// Baca file txt line-by-line menggunakan stream (hemat memori)
+function searchInFile(filePath, targetLower) {
+    return new Promise((resolve, reject) => {
+        if (!fs.existsSync(filePath)) {
+            return resolve(null);
+        }
+
+        const rl = readline.createInterface({
+            input: fs.createReadStream(filePath, { encoding: 'utf8' }),
+            crlfDelay: Infinity // Handle \r\n (Windows line endings)
+        });
+
+        let lineNum = 0;
+        let found = null;
+
+        rl.on('line', (rawLine) => {
+            if (found) return; // Sudah ketemu, skip sisa baris
+
+            lineNum++;
+            const line = rawLine.trim();
+            if (!line) return;
+
+            const starIdx = line.indexOf('☆');
+
+            if (starIdx === -1) {
+                // Format: hanya hash
+                if (line.toLowerCase() === targetLower) {
+                    found = { lineNum, hash: line, plain: null };
+                    rl.close();
+                }
+            } else {
+                // Format: plaintext☆hash
+                const hashPart = line.substring(starIdx + 1).trim();
+                if (hashPart.toLowerCase() === targetLower) {
+                    const plain = line.substring(0, starIdx).trim();
+                    found = { lineNum, hash: hashPart, plain };
+                    rl.close();
+                }
+            }
+        });
+
+        rl.on('close', () => resolve(found));
+        rl.on('error', (err) => reject(err));
+    });
+}
+
 exports.handler = async (event) => {
     const target = event.queryStringParameters?.text;
 
     if (!target) {
         return {
-            statusCode: 200,
+            statusCode: 400,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ found: false, error: 'Missing text parameter' })
+            body: JSON.stringify({ error: 'Missing text parameter' })
         };
     }
 
@@ -31,61 +78,35 @@ exports.handler = async (event) => {
         return {
             statusCode: 200,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ found: false, error: 'Unknown hash length' })
+            body: JSON.stringify({ found: false, error: 'Hash length not recognized', len: targetLen })
         };
     }
 
-    const dataDir = __dirname;
-
     for (const entry of entries) {
-        const filePath = path.join(dataDir, entry.file);
+        const filePath = path.join(__dirname, entry.file);
 
         try {
-            if (!fs.existsSync(filePath)) continue;
+            const result = await searchInFile(filePath, targetLower);
 
-            const content = fs.readFileSync(filePath, 'utf8');
-            const lines = content.split('\n');
-
-            for (let i = 0; i < lines.length; i++) {
-                const line = lines[i];
-                const starIdx = line.indexOf('☆');
-
-                if (starIdx === -1) {
-                    if (line.trim().toLowerCase() === targetLower) {
-                        return {
-                            statusCode: 200,
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                found: true,
-                                file: entry.file,
-                                type: entry.label,
-                                line: i + 1,
-                                hash: line.trim()
-                            })
-                        };
-                    }
-                    continue;
+            if (result) {
+                const response = {
+                    found: true,
+                    type: entry.label,
+                    line: result.lineNum,
+                    hash: result.hash
+                };
+                if (result.plain !== null) {
+                    response.plain = result.plain;
                 }
-
-                const hashPart = line.substring(starIdx + 1).trim();
-                if (hashPart.toLowerCase() === targetLower) {
-                    const plain = line.substring(0, starIdx).trim();
-                    return {
-                        statusCode: 200,
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            found: true,
-                            file: entry.file,
-                                type: entry.label,
-                            line: i + 1,
-                            plain: plain,
-                            hash: hashPart
-                        })
-                    };
-                }
+                return {
+                    statusCode: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(response)
+                };
             }
-        } catch(e) {
-            continue;
+        } catch (err) {
+            console.error(`Error reading ${entry.file}:`, err.message);
+            // Lanjut ke file berikutnya jika ada error
         }
     }
 
