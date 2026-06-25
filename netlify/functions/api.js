@@ -31,24 +31,20 @@ exports.handler = async (event) => {
         return {
             statusCode: 200,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ found: false, error: 'Unknown hash length', targetLen: targetLen })
+            body: JSON.stringify({ found: false, error: 'Unknown hash length' })
         };
     }
 
-    const dataDir = path.join(__dirname, '../../public');
-    const debugInfo = [];
+    const dataDir = path.resolve(__dirname, '..', '..', 'public');
 
     for (const entry of entries) {
         const filePath = path.join(dataDir, entry.file);
-        debugInfo.push({ file: entry.file, path: filePath, exists: fs.existsSync(filePath) });
 
         try {
             if (!fs.existsSync(filePath)) continue;
 
             const content = fs.readFileSync(filePath, 'utf8');
             const lines = content.split('\n');
-            debugInfo[debugInfo.length - 1].totalLines = lines.length;
-            debugInfo[debugInfo.length - 1].firstLine = lines[0]?.substring(0, 100);
 
             for (let i = 0; i < lines.length; i++) {
                 const line = lines[i];
@@ -89,7 +85,6 @@ exports.handler = async (event) => {
                 }
             }
         } catch(e) {
-            debugInfo[debugInfo.length - 1].error = e.message;
             continue;
         }
     }
@@ -97,14 +92,6 @@ exports.handler = async (event) => {
     return {
         statusCode: 200,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-            found: false, 
-            debug: {
-                target: targetLower,
-                targetLen: targetLen,
-                dataDir: dataDir,
-                files: debugInfo
-            }
-        })
+        body: JSON.stringify({ found: false })
     };
 };
